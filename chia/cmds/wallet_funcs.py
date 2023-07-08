@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from chia.cmds.cmds_util import get_wallet_client, transaction_status_msg, transaction_submitted_msg
+from chia.cmds.param_types import CliAddress, CliAmount
 from chia.cmds.peer_funcs import print_connections
 from chia.cmds.units import units
 from chia.rpc.wallet_rpc_client import WalletRpcClient
@@ -26,7 +27,7 @@ from chia.wallet.trading.offer import Offer
 from chia.wallet.trading.trade_status import TradeStatus
 from chia.wallet.transaction_record import TransactionRecord
 from chia.wallet.transaction_sorting import SortKey
-from chia.wallet.util.address_type import AddressType, ensure_valid_address
+from chia.wallet.util.address_type import AddressType
 from chia.wallet.util.puzzle_decorator_type import PuzzleDecoratorType
 from chia.wallet.util.query_filter import HashFilter, TransactionTypeFilter
 from chia.wallet.util.transaction_type import CLAWBACK_TRANSACTION_TYPES, TransactionType
@@ -243,7 +244,7 @@ async def get_transactions(
                     break
 
 
-def check_unusual_transaction(amount: Decimal, fee: Decimal) -> bool:
+def check_unusual_transaction(amount: uint64, fee: uint64) -> bool:
     return fee >= amount
 
 
@@ -252,13 +253,13 @@ async def send(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
     wallet_id: int,
-    amount: Decimal,
+    amount: CliAmount,
     memo: Optional[str],
-    fee: Decimal,
-    address: str,
+    fee: uint64,
+    address: CliAddress,
     override: bool,
-    min_coin_amount: Decimal,
-    max_coin_amount: Decimal,
+    min_coin_amount: CliAmount,
+    max_coin_amount: CliAmount,
     excluded_coin_ids: Sequence[str],
     reuse_puzhash: Optional[bool],
     clawback_time_lock: int,
@@ -269,15 +270,6 @@ async def send(
         else:
             memos = [memo]
 
-        if not override and check_unusual_transaction(amount, fee):
-            print(
-                f"A transaction of amount {amount} and fee {fee} is unusual.\n"
-                f"Pass in --override if you are sure you mean to do this."
-            )
-            return
-        if amount == 0:
-            print("You can not send an empty transaction")
-            return
         if clawback_time_lock < 0:
             print("Clawback time lock seconds cannot be negative.")
             return
@@ -288,17 +280,27 @@ async def send(
             print(f"Wallet id: {wallet_id} not found.")
             return
 
-        final_fee: uint64 = uint64(int(fee * units["chia"]))  # fees are always in XCH mojos
-        final_amount: uint64 = uint64(int(amount * mojo_per_unit))
-        final_min_coin_amount: uint64 = uint64(int(min_coin_amount * mojo_per_unit))
-        final_max_coin_amount: uint64 = uint64(int(max_coin_amount * mojo_per_unit))
+        final_amount: uint64 = amount.convert_amount(mojo_per_unit)
+        final_min_coin_amount: uint64 = min_coin_amount.convert_amount(mojo_per_unit)
+        final_max_coin_amount: uint64 = max_coin_amount.convert_amount(mojo_per_unit)
+
+        if not override and check_unusual_transaction(final_amount, fee):
+            print(
+                f"A transaction of amount {final_amount / units['chia']} and fee {fee} is unusual.\n"
+                f"Pass in --override if you are sure you mean to do this."
+            )
+            return
+        if final_amount == 0:
+            print("You can not send an empty transaction")
+            return
+
         if typ == WalletType.STANDARD_WALLET:
             print("Submitting transaction...")
             res = await wallet_client.send_transaction(
                 wallet_id,
                 final_amount,
-                address,
-                final_fee,
+                address.original_address,
+                fee,
                 memos,
                 final_min_coin_amount,
                 final_max_coin_amount,
@@ -315,8 +317,8 @@ async def send(
             res = await wallet_client.cat_spend(
                 wallet_id,
                 final_amount,
-                address,
-                final_fee,
+                address.original_address,
+                fee,
                 memos,
                 final_min_coin_amount,
                 final_max_coin_amount,
@@ -367,44 +369,31 @@ async def update_derivation_index(wallet_rpc_port: Optional[int], fp: Optional[i
         print("Your balances may take a while to update.")
 
 
-async def add_token(wallet_rpc_port: Optional[int], fp: Optional[int], asset_id: str, token_name: str) -> None:
+async def add_token(wallet_rpc_port: Optional[int], fp: Optional[int], asset_id: bytes32, token_name: str) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, _):
-        try:
-            asset_id_bytes: bytes32 = bytes32.from_hexstr(asset_id)
-            existing_info: Optional[Tuple[Optional[uint32], str]] = await wallet_client.cat_asset_id_to_name(
-                asset_id_bytes
-            )
-            if existing_info is None or existing_info[0] is None:
-                response = await wallet_client.create_wallet_for_existing_cat(asset_id_bytes)
-                wallet_id = response["wallet_id"]
-                await wallet_client.set_cat_name(wallet_id, token_name)
-                print(f"Successfully added {token_name} with wallet id {wallet_id} on key {fingerprint}")
-            else:
-                wallet_id, old_name = existing_info
-                await wallet_client.set_cat_name(wallet_id, token_name)
-                print(
-                    f"Successfully renamed {old_name} with wallet_id {wallet_id} on key {fingerprint} to {token_name}"
-                )
-        except ValueError as e:
-            if "fromhex()" in str(e):
-                print(f"{asset_id} is not a valid Asset ID")
-            else:
-                raise
+        existing_info: Optional[Tuple[Optional[uint32], str]] = await wallet_client.cat_asset_id_to_name(asset_id)
+        if existing_info is None or existing_info[0] is None:
+            response = await wallet_client.create_wallet_for_existing_cat(asset_id)
+            wallet_id = response["wallet_id"]
+            await wallet_client.set_cat_name(wallet_id, token_name)
+            print(f"Successfully added {token_name} with wallet id {wallet_id} on key {fingerprint}")
+        else:
+            wallet_id, old_name = existing_info
+            await wallet_client.set_cat_name(wallet_id, token_name)
+            print(f"Successfully renamed {old_name} with wallet_id {wallet_id} on key {fingerprint} to {token_name}")
 
 
 async def make_offer(
     *,
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
-    d_fee: Decimal,
+    fee: uint64,
     offers: Sequence[str],
     requests: Sequence[str],
     filepath: str,
     reuse_puzhash: Optional[bool],
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
-        fee: int = int(d_fee * units["chia"])
-
         if offers == [] or requests == []:
             print("Not creating offer: Must be offering and requesting at least one asset")
         else:
@@ -624,7 +613,7 @@ async def get_offers(
     *,
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
-    offer_id: Optional[str],
+    offer_id: Optional[bytes32],
     filepath: Optional[str],
     exclude_my_offers: bool = False,
     exclude_taken_offers: bool = False,
@@ -660,7 +649,7 @@ async def get_offers(
                 start = end
                 end += batch_size
         else:
-            records = [await wallet_client.get_offer(bytes32.from_hexstr(offer_id), file_contents)]
+            records = [await wallet_client.get_offer(offer_id, file_contents)]
             if filepath is not None:
                 with open(pathlib.Path(filepath), "w") as file:
                     file.write(Offer.from_bytes(records[0].offer).to_bech32())
@@ -673,7 +662,7 @@ async def get_offers(
 async def take_offer(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
-    d_fee: Decimal,
+    fee: uint64,
     file: str,
     examine_only: bool,
 ) -> None:
@@ -685,8 +674,6 @@ async def take_offer(
                 ffile.close()
         else:
             offer_hex = file
-
-        fee: int = int(d_fee * units["chia"])
 
         try:
             offer = Offer.from_bech32(offer_hex)
@@ -789,12 +776,9 @@ async def take_offer(
 
 
 async def cancel_offer(
-    wallet_rpc_port: Optional[int], fp: Optional[int], d_fee: Decimal, offer_id_hex: str, secure: bool
+    wallet_rpc_port: Optional[int], fp: Optional[int], fee: uint64, offer_id: bytes32, secure: bool
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
-        offer_id = bytes32.from_hexstr(offer_id_hex)
-        fee: int = int(d_fee * units["chia"])
-
         trade_record = await wallet_client.get_offer(offer_id, file_contents=True)
         await print_trade_record(trade_record, wallet_client, summaries=True)
 
@@ -889,10 +873,9 @@ async def print_balances(
 
 
 async def create_did_wallet(
-    wallet_rpc_port: Optional[int], fp: Optional[int], d_fee: Decimal, name: Optional[str], amount: int
+    wallet_rpc_port: Optional[int], fp: Optional[int], fee: uint64, name: Optional[str], amount: int
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
-        fee: int = int(d_fee * units["chia"])
         try:
             response = await wallet_client.create_new_did_wallet(amount, fee, name)
             wallet_id = response["wallet_id"]
@@ -977,13 +960,14 @@ async def transfer_did(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
     did_wallet_id: int,
-    fee: int,
-    target_address: str,
+    fee: uint64,
+    target_cli_address: CliAddress,
     with_recovery: bool,
     reuse_puzhash: Optional[bool],
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
         try:
+            target_address = target_cli_address.original_address
             response = await wallet_client.did_transfer_did(
                 did_wallet_id,
                 target_address,
@@ -1024,11 +1008,11 @@ async def find_lost_did(
 
 
 async def create_nft_wallet(
-    wallet_rpc_port: Optional[int], fp: Optional[int], did_id: Optional[str] = None, name: Optional[str] = None
+    wallet_rpc_port: Optional[int], fp: Optional[int], did_id: Optional[CliAddress] = None, name: Optional[str] = None
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
         try:
-            response = await wallet_client.create_new_nft_wallet(did_id, name)
+            response = await wallet_client.create_new_nft_wallet(did_id.original_address if did_id else None, name)
             wallet_id = response["wallet_id"]
             print(f"Successfully created an NFT wallet with id {wallet_id} on key {fingerprint}")
         except Exception as e:
@@ -1040,8 +1024,8 @@ async def mint_nft(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
     wallet_id: int,
-    royalty_address: Optional[str],
-    target_address: Optional[str],
+    royalty_cli_address: Optional[CliAddress],
+    target_cli_address: Optional[CliAddress],
     no_did_ownership: bool,
     hash: str,
     uris: List[str],
@@ -1051,22 +1035,13 @@ async def mint_nft(
     license_uris: List[str],
     edition_total: Optional[int],
     edition_number: Optional[int],
-    d_fee: Decimal,
+    fee: uint64,
     royalty_percentage: int,
     reuse_puzhash: Optional[bool],
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
-        royalty_address = (
-            None
-            if not royalty_address
-            else ensure_valid_address(royalty_address, allowed_types={AddressType.XCH}, config=config)
-        )
-        target_address = (
-            None
-            if not target_address
-            else ensure_valid_address(target_address, allowed_types={AddressType.XCH}, config=config)
-        )
-        fee: int = int(d_fee * units["chia"])
+        royalty_address = royalty_cli_address.validate_address_type(AddressType.XCH) if royalty_cli_address else None
+        target_address = target_cli_address.validate_address_type(AddressType.XCH) if target_cli_address else None
         try:
             response = await wallet_client.get_nft_wallet_did(wallet_id)
             wallet_did = response["did_id"]
@@ -1110,7 +1085,7 @@ async def add_uri_to_nft(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
     wallet_id: int,
-    d_fee: Decimal,
+    fee: uint64,
     nft_coin_id: str,
     uri: str,
     metadata_uri: str,
@@ -1132,7 +1107,6 @@ async def add_uri_to_nft(
                 uri_value = license_uri
             else:
                 raise ValueError("You must provide at least one of the URI flags")
-            fee: int = int(d_fee * units["chia"])
             response = await wallet_client.add_uri_to_nft(wallet_id, nft_coin_id, key, uri_value, fee, reuse_puzhash)
             spend_bundle = response["spend_bundle"]
             print(f"URI added successfully with spend bundle: {spend_bundle}")
@@ -1145,15 +1119,14 @@ async def transfer_nft(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
     wallet_id: int,
-    d_fee: Decimal,
+    fee: uint64,
     nft_coin_id: str,
-    target_address: str,
+    target_cli_address: CliAddress,
     reuse_puzhash: Optional[bool],
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
         try:
-            target_address = ensure_valid_address(target_address, allowed_types={AddressType.XCH}, config=config)
-            fee: int = int(d_fee * units["chia"])
+            target_address = target_cli_address.validate_address_type(AddressType.XCH)
             response = await wallet_client.transfer_nft(
                 wallet_id, nft_coin_id, target_address, fee, reuse_puzhash=reuse_puzhash
             )
@@ -1220,13 +1193,12 @@ async def set_nft_did(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
     wallet_id: int,
-    d_fee: Decimal,
+    fee: uint64,
     nft_coin_id: str,
     did_id: str,
     reuse_puzhash: Optional[bool],
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
-        fee: int = int(d_fee * units["chia"])
         try:
             response = await wallet_client.set_nft_did(wallet_id, did_id, nft_coin_id, fee, reuse_puzhash=reuse_puzhash)
             spend_bundle = response["spend_bundle"]
@@ -1305,31 +1277,30 @@ def fungible_assets_from_offer(offer: Offer) -> List[Optional[bytes32]]:
 async def send_notification(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
-    d_fee: Decimal,
-    address_str: str,
-    message_hex: str,
-    d_amount: Decimal,
+    fee: uint64,
+    address: CliAddress,
+    message: bytes,
+    cli_amount: CliAmount,
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
-        address: bytes32 = decode_puzzle_hash(address_str)
-        amount: uint64 = uint64(d_amount * units["chia"])
-        message: bytes = bytes(message_hex, "utf8")
-        fee: uint64 = uint64(d_fee * units["chia"])
+        amount: uint64 = cli_amount.convert_amount(units["chia"])
 
-        tx = await wallet_client.send_notification(address, message, amount, fee)
+        tx = await wallet_client.send_notification(address.puzzle_hash, message, amount, fee)
 
         print("Notification sent successfully.")
         print(f"To get status, use command: chia wallet get_transaction -f {fingerprint} -tx 0x{tx.name}")
 
 
 async def get_notifications(
-    wallet_rpc_port: Optional[int], fp: Optional[int], str_ids: Sequence[str], start: Optional[int], end: Optional[int]
+    wallet_rpc_port: Optional[int],
+    fp: Optional[int],
+    ids: Optional[Sequence[bytes32]],
+    start: Optional[int],
+    end: Optional[int],
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
-        ids: Optional[List[bytes32]] = [bytes32.from_hexstr(sid) for sid in str_ids]
         if ids is not None and len(ids) == 0:
             ids = None
-
         notifications = await wallet_client.get_notifications(ids=ids, pagination=(start, end))
         for notification in notifications:
             print("")
@@ -1339,11 +1310,9 @@ async def get_notifications(
 
 
 async def delete_notifications(
-    wallet_rpc_port: Optional[int], fp: Optional[int], str_ids: Sequence[str], delete_all: bool
+    wallet_rpc_port: Optional[int], fp: Optional[int], ids: Sequence[bytes32], delete_all: bool
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
-        ids: Optional[List[bytes32]] = [bytes32.from_hexstr(sid) for sid in str_ids]
-
         if delete_all:
             print(f"Success: {await wallet_client.delete_notifications()}")
         else:
@@ -1356,26 +1325,28 @@ async def sign_message(
     fp: Optional[int],
     addr_type: AddressType,
     message: str,
-    address: Optional[str] = None,
-    did_id: Optional[str] = None,
-    nft_id: Optional[str] = None,
+    address: Optional[CliAddress] = None,
+    did_id: Optional[CliAddress] = None,
+    nft_id: Optional[CliAddress] = None,
 ) -> None:
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
         if addr_type == AddressType.XCH:
             if address is None:
                 print("Address is required for XCH address type.")
                 return
-            pubkey, signature, signing_mode = await wallet_client.sign_message_by_address(address, message)
+            pubkey, signature, signing_mode = await wallet_client.sign_message_by_address(
+                address.original_address, message
+            )
         elif addr_type == AddressType.DID:
             if did_id is None:
                 print("DID id is required for DID address type.")
                 return
-            pubkey, signature, signing_mode = await wallet_client.sign_message_by_id(did_id, message)
+            pubkey, signature, signing_mode = await wallet_client.sign_message_by_id(did_id.original_address, message)
         elif addr_type == AddressType.NFT:
             if nft_id is None:
                 print("NFT id is required for NFT address type.")
                 return
-            pubkey, signature, signing_mode = await wallet_client.sign_message_by_id(nft_id, message)
+            pubkey, signature, signing_mode = await wallet_client.sign_message_by_id(nft_id.original_address, message)
         else:
             print("Invalid wallet type.")
             return
@@ -1387,7 +1358,7 @@ async def sign_message(
 
 
 async def spend_clawback(
-    *, wallet_rpc_port: Optional[int], fp: Optional[int], fee: Decimal, tx_ids_str: str
+    *, wallet_rpc_port: Optional[int], fp: Optional[int], fee: uint64, tx_ids_str: str
 ) -> None:  # pragma: no cover
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, _, _):
         tx_ids = []
@@ -1399,22 +1370,22 @@ async def spend_clawback(
         if fee < 0:
             print("Batch fee cannot be negative.")
             return
-        response = await wallet_client.spend_clawback_coins(tx_ids, int(fee * units["chia"]))
+        response = await wallet_client.spend_clawback_coins(tx_ids, fee)
         print(str(response))
 
 
 async def mint_vc(
-    wallet_rpc_port: Optional[int], fp: Optional[int], did: str, d_fee: Decimal, target_address: Optional[str]
+    wallet_rpc_port: Optional[int],
+    fp: Optional[int],
+    did: CliAddress,
+    fee: uint64,
+    target_address: Optional[CliAddress],
 ) -> None:  # pragma: no cover
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
         vc_record, txs = await wallet_client.vc_mint(
-            decode_puzzle_hash(ensure_valid_address(did, allowed_types={AddressType.DID}, config=config)),
-            None
-            if target_address is None
-            else decode_puzzle_hash(
-                ensure_valid_address(target_address, allowed_types={AddressType.XCH}, config=config)
-            ),
-            uint64(int(d_fee * units["chia"])),
+            did.validate_address_type_get_ph(AddressType.DID),
+            target_address.validate_address_type_get_ph(AddressType.XCH) if target_address else None,
+            fee,
         )
 
         print(f"New VC with launcher ID minted: {vc_record.vc.launcher_id}")
@@ -1459,18 +1430,18 @@ async def spend_vc(
     *,
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
-    vc_id: str,
-    d_fee: Decimal,
-    new_puzhash: Optional[str],
+    vc_id: bytes32,
+    fee: uint64,
+    new_puzhash: Optional[bytes32],
     new_proof_hash: str,
     reuse_puzhash: bool,
 ) -> None:  # pragma: no cover
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
         txs = await wallet_client.vc_spend(
-            bytes32.from_hexstr(vc_id),
-            new_puzhash=None if new_puzhash is None else bytes32.from_hexstr(new_puzhash),
+            vc_id,
+            new_puzhash=new_puzhash,
             new_proof_hash=bytes32.from_hexstr(new_proof_hash),
-            fee=uint64(int(d_fee * units["chia"])),
+            fee=fee,
             reuse_puzhash=reuse_puzhash,
         )
 
@@ -1518,9 +1489,9 @@ async def get_proofs_for_root(
 async def revoke_vc(
     wallet_rpc_port: Optional[int],
     fp: Optional[int],
-    parent_coin_id: Optional[str],
-    vc_id: Optional[str],
-    fee: Decimal,
+    parent_coin_id: Optional[bytes32],
+    vc_id: Optional[bytes32],
+    fee: uint64,
     reuse_puzhash: bool,
 ) -> None:  # pragma: no cover
     async with get_wallet_client(wallet_rpc_port, fp) as (wallet_client, fingerprint, config):
@@ -1528,16 +1499,16 @@ async def revoke_vc(
             if vc_id is None:
                 print("Must specify either --parent-coin-id or --vc-id")
                 return
-            record = await wallet_client.vc_get(bytes32.from_hexstr(vc_id))
+            record = await wallet_client.vc_get(vc_id)
             if record is None:
-                print(f"Cannot find a VC with ID {vc_id}")
+                print(f"Cannot find a VC with ID {vc_id.hex()}")
                 return
             parent_id: bytes32 = record.vc.coin.parent_coin_info
         else:
-            parent_id = bytes32.from_hexstr(parent_coin_id)
+            parent_id = parent_coin_id
         txs = await wallet_client.vc_revoke(
             parent_id,
-            fee=uint64(fee * units["chia"]),
+            fee=fee,
             reuse_puzhash=reuse_puzhash,
         )
 
