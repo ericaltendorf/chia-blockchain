@@ -46,7 +46,7 @@ from chia.types.coin_record import CoinRecord
 from chia.types.coin_spend import CoinSpend, compute_additions
 from chia.types.spend_bundle import SpendBundle
 from chia.util.ints import uint32, uint64, uint128
-from chia.wallet.conditions import Condition, parse_timelock_info
+from chia.wallet.conditions import Condition, ConditionValidTimes, parse_timelock_info
 from chia.wallet.derive_keys import find_owner_sk
 from chia.wallet.sign_coin_spends import sign_coin_spends
 from chia.wallet.transaction_record import TransactionRecord
@@ -619,6 +619,7 @@ class PoolWallet:
             memos=[],
             type=uint32(TransactionType.OUTGOING_TX.value),
             name=signed_spend_bundle.name(),
+            valid_times=ConditionValidTimes(),
         )
 
         await self.publish_transactions(tx_record, fee_tx)
@@ -894,6 +895,7 @@ class PoolWallet:
             trade_id=None,
             type=uint32(TransactionType.OUTGOING_TX.value),
             name=full_spend.name(),
+            valid_times=ConditionValidTimes(),
         )
 
         await self.publish_transactions(absorb_transaction, fee_tx)
