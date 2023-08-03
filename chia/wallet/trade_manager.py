@@ -17,7 +17,7 @@ from chia.types.spend_bundle import SpendBundle
 from chia.util.db_wrapper import DBWrapper2
 from chia.util.hash import std_hash
 from chia.util.ints import uint32, uint64
-from chia.wallet.conditions import Condition
+from chia.wallet.conditions import Condition, ConditionValidTimes, parse_conditions_non_consensus, parse_timelock_info
 from chia.wallet.db_wallet.db_wallet_puzzles import ACS_MU_PH
 from chia.wallet.nft_wallet.nft_wallet import NFTWallet
 from chia.wallet.outer_puzzles import AssetType
@@ -249,6 +249,7 @@ class TradeManager:
                 continue
 
             cancellation_additions: List[Coin] = []
+            valid_times: ConditionValidTimes = parse_timelock_info(extra_conditions)
             for coin in Offer.from_bytes(trade.offer).get_cancellation_coins():
                 wallet = await self.wallet_state_manager.get_wallet_for_coin(coin.name())
 
@@ -315,6 +316,7 @@ class TradeManager:
                         type=uint32(TransactionType.INCOMING_TX.value),
                         name=cancellation_additions[0].name(),
                         memos=[],
+                        valid_times=valid_times,
                     )
                 )
 
@@ -385,6 +387,7 @@ class TradeManager:
             trade_id=created_offer.name(),
             status=uint32(TradeStatus.PENDING_ACCEPT.value),
             sent_to=[],
+            valid_times=parse_timelock_info(extra_conditions),
         )
 
         if success is True and trade_offer is not None and not validate_only:
@@ -602,6 +605,13 @@ class TradeManager:
         settlement_coin_ids: List[bytes32] = [c.name() for c in settlement_coins]
         additions: List[Coin] = final_spend_bundle.not_ephemeral_additions()
         removals: List[Coin] = final_spend_bundle.removals()
+        valid_times: ConditionValidTimes = parse_timelock_info(
+            parse_conditions_non_consensus(
+                condition
+                for spend in final_spend_bundle.coin_spends
+                for condition in spend.puzzle_reveal.to_program().run(spend.solution.to_program()).as_iter()
+            )
+        )
         all_fees = uint64(final_spend_bundle.fees())
 
         txs = []
@@ -633,6 +643,7 @@ class TradeManager:
                             type=uint32(TransactionType.INCOMING_TRADE.value),
                             name=std_hash(final_spend_bundle.name() + addition.name()),
                             memos=[],
+                            valid_times=valid_times,
                         )
                     )
                 else:  # This is change
@@ -679,6 +690,7 @@ class TradeManager:
                     type=uint32(TransactionType.OUTGOING_TRADE.value),
                     name=std_hash(final_spend_bundle.name() + removal_tree_hash),
                     memos=[],
+                    valid_times=valid_times,
                 )
             )
 
@@ -754,6 +766,7 @@ class TradeManager:
             trade_id=complete_offer.name(),
             status=uint32(TradeStatus.PENDING_CONFIRM.value),
             sent_to=[],
+            valid_times=parse_timelock_info(extra_conditions),
         )
 
         await self.save_trade(trade_record, offer)
@@ -776,6 +789,7 @@ class TradeManager:
             type=uint32(TransactionType.OUTGOING_TRADE.value),
             name=final_spend_bundle.name(),
             memos=[],
+            valid_times=ConditionValidTimes(),
         )
         await self.wallet_state_manager.add_pending_transaction(push_tx)
         for tx in tx_records:

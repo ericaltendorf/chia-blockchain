@@ -49,7 +49,7 @@ from chia.util.path import path_from_root
 from chia.wallet.cat_wallet.cat_constants import DEFAULT_CATS
 from chia.wallet.cat_wallet.cat_utils import CAT_MOD, CAT_MOD_HASH, construct_cat_puzzle, match_cat_puzzle
 from chia.wallet.cat_wallet.cat_wallet import CATWallet
-from chia.wallet.conditions import Condition
+from chia.wallet.conditions import Condition, ConditionValidTimes, parse_timelock_info
 from chia.wallet.db_wallet.db_wallet_puzzles import MIRROR_PUZZLE_HASH
 from chia.wallet.derivation_record import DerivationRecord
 from chia.wallet.derive_keys import (
@@ -809,6 +809,7 @@ class WalletStateManager:
             type=uint32(TransactionType.OUTGOING_CLAWBACK),
             name=spend_bundle.name(),
             memos=list(compute_memos(spend_bundle).items()),
+            valid_times=parse_timelock_info(extra_conditions),
         )
         await self.add_pending_transaction(tx_record)
         # Update incoming tx to prevent double spend and mark it is pending
@@ -1189,6 +1190,7 @@ class WalletStateManager:
                         type=uint32(TransactionType.OUTGOING_CLAWBACK),
                         name=clawback_spend_bundle.name(),
                         memos=list(compute_memos(clawback_spend_bundle).items()),
+                        valid_times=ConditionValidTimes(),
                     )
                     await self.tx_store.add_transaction_record(tx_record)
             coin_record = WalletCoinRecord(
@@ -1230,6 +1232,7 @@ class WalletStateManager:
                 # Use coin ID as the TX ID to mapping with the coin table
                 name=coin_record.coin.name(),
                 memos=list(memos.items()),
+                valid_times=ConditionValidTimes(),
             )
             await self.tx_store.add_transaction_record(tx_record)
         return None
@@ -1415,6 +1418,7 @@ class WalletStateManager:
                                     type=uint32(tx_type),
                                     name=bytes32(token_bytes()),
                                     memos=[],
+                                    valid_times=ConditionValidTimes(),
                                 )
                                 await self.tx_store.add_transaction_record(tx_record)
 
@@ -1480,6 +1484,7 @@ class WalletStateManager:
                                         type=uint32(TransactionType.OUTGOING_TX.value),
                                         name=tx_name,
                                         memos=[],
+                                        valid_times=ConditionValidTimes(),
                                     )
 
                                     await self.tx_store.add_transaction_record(tx_record)
@@ -1769,6 +1774,7 @@ class WalletStateManager:
                 type=uint32(tx_type),
                 name=coin_name,
                 memos=[],
+                valid_times=ConditionValidTimes(),
             )
             if tx_record.amount > 0:
                 await self.tx_store.add_transaction_record(tx_record)

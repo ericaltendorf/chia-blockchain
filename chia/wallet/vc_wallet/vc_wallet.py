@@ -18,7 +18,7 @@ from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.coin_spend import CoinSpend
 from chia.types.spend_bundle import SpendBundle
 from chia.util.ints import uint32, uint64, uint128
-from chia.wallet.conditions import Condition, UnknownCondition
+from chia.wallet.conditions import Condition, UnknownCondition, parse_timelock_info
 from chia.wallet.did_wallet.did_wallet import DIDWallet
 from chia.wallet.payment import Payment
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import solution_for_conditions
@@ -210,6 +210,7 @@ class VCWallet:
             type=uint32(TransactionType.OUTGOING_TX.value),
             name=spend_bundle.name(),
             memos=list(compute_memos(spend_bundle).items()),
+            valid_times=parse_timelock_info(extra_conditions),
         )
 
         return vc_record, [tx]
@@ -350,6 +351,7 @@ class VCWallet:
                 type=uint32(TransactionType.OUTGOING_TX.value),
                 name=spend_bundle.name(),
                 memos=list(compute_memos(spend_bundle).items()),
+                valid_times=parse_timelock_info(extra_conditions),
             )
         )
         return tx_list
@@ -422,6 +424,7 @@ class VCWallet:
             type=uint32(TransactionType.OUTGOING_TX.value),
             name=final_bundle.name(),
             memos=list(compute_memos(final_bundle).items()),
+            valid_times=parse_timelock_info(extra_conditions),
         )
         if fee > 0:
             chia_tx: TransactionRecord = await self.wallet_state_manager.main_wallet.create_tandem_xch_tx(
