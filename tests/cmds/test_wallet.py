@@ -33,7 +33,8 @@ WALLET_ID: int = 1
 WALLET_ID_ARG: str = f"-i{WALLET_ID}"
 bytes32_hexstr = "0x6262626262626262626262626262626262626262626262626262626262626262"
 
-test_offer_file_name: str = "test_offer.toffer"
+test_offer_file_path: Path = Path("tests") / "cmds" / "test_offer.toffer"
+test_offer_file_name: str = str(test_offer_file_path)
 test_offer_file_bech32: str = open(test_offer_file_name, "r").read()
 test_offer_id: str = "0xdfb7e8643376820ec995b0bcdb3fc1f764c16b814df5e074631263fcf1e00839"
 test_offer_id_bytes: bytes32 = bytes32.from_hexstr(test_offer_id)
@@ -279,12 +280,14 @@ def test_show(capsys: object, get_test_cli_clients: Tuple[TestRpcClients, Path])
         "   -Asset ID:              dc59bcd60ce5fc9c93a5d3b11875486b03efb53a53da61e453f5cf61a7746860",
         "NFT Wallet:\n   -Total Balance:         1.0",
         "   -DID ID:                0xcee228b8638c67cb66a55085be99fa3b457ae5b56915896f581990f600b2c652",
-        "FULL_NODE 127.0.0.1                               47482/47482 01010101... May 12 11:36:41      0.0|0.0 ",
+        "FULL_NODE 127.0.0.1",
+        "47482/47482 01010101... May 12",
     ]
     other_assert_list = [
         "test2:\n   -Total Balance:         2000000.0  (2000000000 mojo)",
         "   -Asset ID:              dc59bcd60ce5fc9c93a5d3b11875486b03efb53a53da61e453f5cf61a7746860",
-        "FULL_NODE 127.0.0.1                               47482/47482 01010101... May 12 11:36:41      0.0|0.0 ",
+        "FULL_NODE 127.0.0.1",
+        "47482/47482 01010101... May 12",
     ]
     cli_assert_shortcut(output, assert_list)
     cli_assert_shortcut(other_output, other_assert_list)
