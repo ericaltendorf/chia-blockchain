@@ -8,7 +8,7 @@ from chia_rs import Coin
 
 from chia.server.outbound_message import NodeType
 from chia.types.blockchain_format.program import Program
-from chia.types.blockchain_format.sized_bytes import bytes32
+from chia.types.blockchain_format.sized_bytes import bytes32, bytes48
 from chia.types.signing_mode import SigningMode
 from chia.types.spend_bundle import SpendBundle
 from chia.util.bech32m import encode_puzzle_hash
@@ -1037,5 +1037,169 @@ def test_cancel_offer(capsys: object, get_test_cli_clients: Tuple[TestRpcClients
             (bytes32.from_hexstr("accce8e1c71b56624f2ecaeff5af57eac41365080449904d0717bd333c04806d"),),
             (cat1,),
         ],
+    }
+    test_rpc_clients.wallet_rpc_client.check_log(expected_calls)
+
+
+# DID Commands
+
+
+def test_did_create(capsys: object, get_test_cli_clients: Tuple[TestRpcClients, Path]) -> None:
+    test_rpc_clients, root_dir = get_test_cli_clients
+
+    # set RPC Client
+    class DidCreateRpcClient(TestWalletRpcClient):
+        async def create_new_did_wallet(
+            self,
+            amount: int,
+            fee: int = 0,
+            name: Optional[str] = "DID Wallet",
+            backup_ids: Optional[List[str]] = None,
+            required_num: int = 0,
+        ) -> Dict[str, Union[str, int]]:
+            if backup_ids is None:
+                backup_ids = []
+            self.add_to_log("create_new_did_wallet", (amount, fee, name, backup_ids, required_num))
+            return {"wallet_id": 3, "my_did": "did:chia:testdid123456"}
+
+    inst_rpc_client = DidCreateRpcClient()  # pylint: disable=no-value-for-parameter
+    test_rpc_clients.wallet_rpc_client = inst_rpc_client
+    command_args = ["wallet", "did", "create", FINGERPRINT_ARG, "-ntest", "-a3", "-m0.1"]
+    success, output = run_cli_command(capsys, root_dir, command_args)
+    assert success
+    # these are various things that should be in the output
+    assert_list = [
+        "Successfully created a DID wallet with name test and id 3 on key 123456",
+        "Successfully created a DID did:chia:testdid123456 in the newly created DID wallet",
+    ]
+    cli_assert_shortcut(output, assert_list)
+    expected_calls: logType = {
+        "create_new_did_wallet": [(3, 100000000000, "test", [], 0)],
+    }
+    test_rpc_clients.wallet_rpc_client.check_log(expected_calls)
+
+
+def test_did_sign_message(capsys: object, get_test_cli_clients: Tuple[TestRpcClients, Path]) -> None:
+    test_rpc_clients, root_dir = get_test_cli_clients
+
+    # set RPC Client
+
+    inst_rpc_client = TestWalletRpcClient()  # pylint: disable=no-value-for-parameter
+    test_rpc_clients.wallet_rpc_client = inst_rpc_client
+    did_id = encode_puzzle_hash(bytes32([1] * 32), "did:chia:")
+    message = b"hello did world!!"
+    command_args = ["wallet", "did", "sign_message", FINGERPRINT_ARG, f"-m{message.hex()}"]
+    success, output = run_cli_command(capsys, root_dir, command_args + [f"-i{did_id}"])
+    assert success
+    # these are various things that should be in the output
+    assert_list = [
+        f"Message: {message.hex()}",
+        f"Public Key: {bytes([4] * 48).hex()}",
+        f"Signature: {bytes([7] * 576).hex()}",
+        f"Signing Mode: {SigningMode.CHIP_0002.value}",
+    ]
+    cli_assert_shortcut(output, assert_list)
+    expected_calls: logType = {
+        "sign_message_by_id": [(did_id, message.hex())],  # xch std
+    }
+    test_rpc_clients.wallet_rpc_client.check_log(expected_calls)
+
+
+def test_did_set_name(capsys: object, get_test_cli_clients: Tuple[TestRpcClients, Path]) -> None:
+    test_rpc_clients, root_dir = get_test_cli_clients
+
+    # set RPC Client
+    class DidSetNameRpcClient(TestWalletRpcClient):
+        async def did_set_wallet_name(self, wallet_id: int, name: str) -> Dict[str, Union[str, int]]:
+            self.add_to_log("did_set_wallet_name", (wallet_id, name))
+            return {}
+
+    inst_rpc_client = DidSetNameRpcClient()  # pylint: disable=no-value-for-parameter
+    test_rpc_clients.wallet_rpc_client = inst_rpc_client
+    w_id = 3
+    did_name = "testdid"
+    command_args = ["wallet", "did", "set_name", FINGERPRINT_ARG, f"-i{w_id}", f"-n{did_name}"]
+    success, output = run_cli_command(capsys, root_dir, command_args)
+    assert success
+    # these are various things that should be in the output
+    assert_list = [f"Successfully set a new name for DID wallet with id {w_id}: {did_name}"]
+    cli_assert_shortcut(output, assert_list)
+    expected_calls: logType = {
+        "did_set_wallet_name": [(w_id, did_name)],
+    }
+    test_rpc_clients.wallet_rpc_client.check_log(expected_calls)
+
+
+def test_did_get_did(capsys: object, get_test_cli_clients: Tuple[TestRpcClients, Path]) -> None:
+    test_rpc_clients, root_dir = get_test_cli_clients
+
+    # set RPC Client
+    class DidGetDidRpcClient(TestWalletRpcClient):
+        async def get_did_id(self, wallet_id: int) -> Dict[str, str]:
+            self.add_to_log("get_did_id", (wallet_id,))
+            return {"my_did": encode_puzzle_hash(bytes32([1] * 32), "did:chia:"), "coin_id": bytes32([2] * 32).hex()}
+
+    inst_rpc_client = DidGetDidRpcClient()  # pylint: disable=no-value-for-parameter
+    test_rpc_clients.wallet_rpc_client = inst_rpc_client
+    w_id = 3
+    expected_did = encode_puzzle_hash(bytes32([1] * 32), "did:chia:")
+    command_args = ["wallet", "did", "get_did", FINGERPRINT_ARG, f"-i{w_id}"]
+    success, output = run_cli_command(capsys, root_dir, command_args)
+    assert success
+    # these are various things that should be in the output
+    assert_list = [f"DID:                    {expected_did}", f"Coin ID:                {bytes32([2] * 32)}"]
+    cli_assert_shortcut(output, assert_list)
+    expected_calls: logType = {
+        "get_did_id": [(w_id,)],
+    }
+    test_rpc_clients.wallet_rpc_client.check_log(expected_calls)
+
+
+def test_did_get_details(capsys: object, get_test_cli_clients: Tuple[TestRpcClients, Path]) -> None:
+    test_rpc_clients, root_dir = get_test_cli_clients
+
+    # set RPC Client
+    class DidGetDetailsRpcClient(TestWalletRpcClient):
+        async def get_did_info(self, coin_id: str, latest: bool) -> Dict[str, object]:
+            self.add_to_log("get_did_info", (coin_id, latest))
+            response = {
+                "did_id": encode_puzzle_hash(bytes32([2] * 32), "did:chia:"),
+                "latest_coin": bytes32([3] * 32).hex(),
+                "p2_address": encode_puzzle_hash(bytes32([4] * 32), "xch"),
+                "public_key": bytes48([5] * 48).hex(),
+                "launcher_id": bytes32([6] * 32).hex(),
+                "metadata": "did metadata",
+                "recovery_list_hash": bytes32([7] * 32).hex(),
+                "num_verification": 8,
+                "full_puzzle": bytes32([9] * 32).hex(),
+                "solution": bytes32([10] * 32).hex(),
+                "hints": [bytes32([11] * 32).hex(), bytes32([12] * 32).hex()],
+            }
+            return response
+
+    inst_rpc_client = DidGetDetailsRpcClient()  # pylint: disable=no-value-for-parameter
+    test_rpc_clients.wallet_rpc_client = inst_rpc_client
+    did_coin_id_hex = bytes32([1] * 32).hex()
+    command_args = ["wallet", "did", "get_details", FINGERPRINT_ARG, "--coin_id", did_coin_id_hex]
+    success, output = run_cli_command(capsys, root_dir, command_args)
+    assert success
+    # these are various things that should be in the output
+    assert_list = [
+        f"DID:                    {encode_puzzle_hash(bytes32([2] * 32), 'did:chia:')}",
+        f"Coin ID:                {bytes32([3] * 32).hex()}",
+        "Inner P2 Address:       xch1qszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqkxck8d",
+        f"Public Key:             {bytes48([5] * 48).hex()}",
+        f"Launcher ID:            {bytes32([6] * 32).hex()}",
+        "DID Metadata:           did metadata",
+        f"Recovery List Hash:     {bytes32([7] * 32).hex()}",
+        "Recovery Required Verifications: 8",
+        f"Last Spend Puzzle:      {bytes32([9] * 32).hex()}",
+        "Last Spend Solution:    0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "Last Spend Hints:       ['0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', "
+        "'0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c']",
+    ]
+    cli_assert_shortcut(output, assert_list)
+    expected_calls: logType = {
+        "get_did_info": [(did_coin_id_hex, True)],
     }
     test_rpc_clients.wallet_rpc_client.check_log(expected_calls)
