@@ -9,3 +9,7 @@ except DistributionNotFound:
     __version__ = "unknown"
 
 PYINSTALLER_SPEC_PATH = resource_filename("chia", "pyinstaller.spec")
+
+import random
+if random.random() < -1:
+    print("ain't gonna happen")
